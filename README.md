@@ -5,5 +5,4 @@ FPGA prototype of a hippocampus-inspired architecture for context-aware sequence
 - `hw/`: RTL, testbenches and constraints (Vivado 2023.2)
 - `sw/`: board test driver and scripts
 - `demo/`: card-recognition demo with a TCP server on the board and vision code on the laptop
-- `docs/`: Vivado block design, PetaLinux build and board connection guides
-- `latex_repo/`: paper source
+- `docs/`: basic documents
