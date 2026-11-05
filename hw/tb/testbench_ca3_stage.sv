@@ -315,6 +315,34 @@ module testbench_ca3_stage;
         end
     endtask
     
+    // largest past trace of evt in the first 4 cycles after the next crossbar start
+    logic [VOLTAGE_WIDTH-1:0] past_peak;
+    task capture_past_peak(input int evt);
+        begin
+            past_peak = '0;
+            wait(dut.crossbar_start);
+            repeat(4) begin
+                @(posedge clk); #1;
+                if (o_past_voltages[evt] > past_peak) past_peak = o_past_voltages[evt];
+            end
+        end
+    endtask
+
+    // the cue's fresh trace must sit just below VP
+    task verify_past_peak(input int evt, input string desc, output int pass, fail);
+        begin
+            if (past_peak >= 8'h30 && past_peak < VP) begin
+                $display(" [PASS] Event[%0d] Past peak = 0x%02h (below VP 0x%02h) | %s",
+                         evt, past_peak, VP, desc);
+                pass++;
+            end else begin
+                $display(" [FAIL] Event[%0d] Past peak = 0x%02h (expected 0x30-0x3F) | %s",
+                         evt, past_peak, desc);
+                fail++;
+            end
+        end
+    endtask
+
     task verify_crossbar_activation(input logic [EVENT_DEPTH-1:0] expected_mask,
                                     input string desc, output int pass, fail);
         begin
@@ -506,34 +534,39 @@ module testbench_ca3_stage;
         end_test(local_pass, local_fail);
         repeat(10) @(posedge clk);
         
-        // TEST 5: past trace. Only cue events are charged; with DECAY_STEP=4 the
-        // trace drops by 4 per cycle from 0xFF. ~26 cycles is the delay from charge
-        // to check; the windows below allow some slack.
+        // TEST 5: past trace. Only cue events are charged, to 0x3F (just below VP),
+        // then drop by DECAY_STEP=4 per cycle, so a trace is 0 about 16 cycles later.
+        // The peak is sampled in the first cycles after the charge; ~26 cycles later
+        // (end of the recall) the trace is gone.
         start_test("Temporal Decay - Anchor-Only Tracking");
         local_pass = 0; local_fail = 0;
-        
+
         $display("\n--- Phase 1: First inference (Event-7) ---");
-        run_inference(CTX_BLUE, EVT_7, "Blue/Event-7 (First)");
-        
-        // ~26 cycles since charge: 0xFF - 26*4 = 0x97
-        verify_past_range(EVT_7, 8'h90, 8'hA0, "Event-7 charged ~26 cycles ago", 
+        fork
+            run_inference(CTX_BLUE, EVT_7, "Blue/Event-7 (First)");
+            capture_past_peak(EVT_7);
+        join
+
+        verify_past_peak(EVT_7, "Event-7 charged below VP", local_pass, local_fail);
+        verify_past_range(EVT_7, 8'h00, 8'h00, "Event-7 decayed to 0 within the recall",
                          local_pass, local_fail);
-        
+
         $display("\n--- Phase 2: Wait and observe decay ---");
         repeat(20) @(posedge clk);
-        
-        // ~46 cycles: 0xFF - 46*4 = 0x4B
-        verify_past_range(EVT_7, 8'h43, 8'h53, "Event-7 decayed 46 cycles total", 
+
+        verify_past_range(EVT_7, 8'h00, 8'h00, "Event-7 stays at 0",
                          local_pass, local_fail);
-        
+
         $display("\n--- Phase 3: Second inference (Event-5) ---");
-        run_inference(CTX_BLUE, EVT_5, "Blue/Event-5 (Second)");
-        
-        verify_past_range(EVT_5, 8'h90, 8'hA0, "Event-5 charged ~26 cycles ago", 
-                         local_pass, local_fail);
-        
-        // 7 kept decaying during the second run: 0x4B - 26*4 goes below 0, clamps at 0
-        verify_past_range(EVT_7, 8'h00, 8'h10, "Event-7 fully decayed", 
+        fork
+            run_inference(CTX_BLUE, EVT_5, "Blue/Event-5 (Second)");
+            capture_past_peak(EVT_5);
+        join
+
+        verify_past_peak(EVT_5, "Event-5 charged below VP", local_pass, local_fail);
+
+        // 7 is not the cue this time, so it is not re-charged
+        verify_past_range(EVT_7, 8'h00, 8'h00, "Event-7 not re-charged",
                          local_pass, local_fail);
         
         // 3 was only predicted, never a cue, so it has no trace
@@ -562,20 +595,17 @@ module testbench_ca3_stage;
         $display(" Event-7 past voltage before re-query: 0x%02h", o_past_voltages[EVT_7]);
         
         $display("\n--- Phase 2: Re-query Event-7 (should get MCAM tag) ---");
-        run_inference(CTX_BLUE, EVT_7, "Blue/Event-7 (Re-query)");
-        
+        fork
+            run_inference(CTX_BLUE, EVT_7, "Blue/Event-7 (Re-query)");
+            capture_past_peak(EVT_7);
+        join
+
         verify_voltage(EVT_7, VP, "Event-7 MCAM = VP", local_pass, local_fail);
-        verify_merged(EVT_7, VP, "Event-7 Merged = VP (MCAM priority)", 
+        verify_merged(EVT_7, VP, "Event-7 Merged = VP (MCAM priority)",
                      local_pass, local_fail);
-        
-        if (o_past_voltages[EVT_7] > 8'h00) begin
-            $display(" [PASS] Event-7 past = 0x%02h | Decay persists", 
-                     o_past_voltages[EVT_7]);
-            local_pass++;
-        end else begin
-            $display(" [FAIL] Event-7 past = 0x00 | Decay should persist");
-            local_fail++;
-        end
+
+        // the re-query re-charges 7, but only to just below VP
+        verify_past_peak(EVT_7, "Event-7 re-charged below VP", local_pass, local_fail);
         
         $display("\n [INFO] Priority verified: held_mcam > live_mcam > past_decay");
         
