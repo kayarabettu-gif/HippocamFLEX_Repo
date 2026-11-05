@@ -146,7 +146,7 @@ module ca3_stage #(
         .EVENT_DEPTH(EVENT_DEPTH),
         .VOLTAGE_WIDTH(VOLTAGE_WIDTH),
         .DECAY_STEP(DECAY_STEP),
-        .MAX_VOLTAGE(8'hFF)
+        .MAX_VOLTAGE(8'h3F)  // just below VP (0x40), so past never outranks the cue
     ) u_tracker (
         .i_clk(clk),
         .i_rst_n(rst_n),
